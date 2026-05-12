@@ -1705,13 +1705,13 @@ The inter-core data sharing (rxData, txData) is already safe because the existin
 
 These are all bugs in `remora-core` (platform-agnostic) that affect all targets. They should be submitted as separate pull requests to the remora-core repository but should be applied locally for the RP2350 port:
 
-| Bug | File | Fix |
-|---|---|---|
-| Thermistor 16-bit ADC divisor | `sensors/thermistor/thermistor.cpp` | Change `65536.0F` to `4096.0F` in the resistance formula |
-| O(n²) SD config string construction | `json/jsonConfigHandler.cpp` | Replace `jsonContent = jsonContent + rtext[i]` loop with `jsonContent.assign(rtext, length)` |
-| VLA on stack in SD loader | `json/jsonConfigHandler.cpp` | Replace `char rtext[length]` with `std::vector<char> rtext(length)` |
-| Thread frequency setter broken | `remora.h/.cpp`, `thread/pruTimer.h/.cpp` | Implement `pruThread::setFrequency()` and un-comment the setter calls in `setBaseFreq()`/`setServoFreq()` |
-| QEI pins hardcoded | `modules/qei/qei.cpp` | Read `"ChA Pin"`, `"ChB Pin"`, `"Index Pin"` from JSON config and pass to `Hardware_QEI` constructor |
+| Bug | File | Fix | Status |
+|---|---|---|---|
+| Thermistor 16-bit ADC divisor | `sensors/thermistor/thermistor.cpp` | Change `65536.0F` to `4096.0F` in the resistance formula | **FIXED** |
+| O(n²) SD config string construction | `json/jsonConfigHandler.cpp` | Replace `jsonContent = jsonContent + rtext[i]` loop with `jsonContent.assign(rtext.data(), length)` | **FIXED** |
+| VLA on stack in SD loader | `json/jsonConfigHandler.cpp` | Replace `char rtext[length]` with `std::vector<char> rtext(length)` | **FIXED** |
+| Thread frequency setter broken | `remora.h/.cpp` | Added `baseTimer->setFrequency(baseFreq)` / `servoTimer->setFrequency(servoFreq)` in `Remora` constructor after JSON loads, before threads created. Startup frequency from JSON now correct. Runtime frequency change (while threads running) still requires `pruThread::setFrequency()` — not yet implemented. | **FIXED (startup)** |
+| QEI pins hardcoded | `modules/qei/qei.cpp` | Read `"ChA Pin"`, `"ChB Pin"`, `"Index Pin"` from JSON config and pass to `Hardware_QEI` constructor | **FIXED** |
 
 ---
 
@@ -1764,9 +1764,18 @@ These are all bugs in `remora-core` (platform-agnostic) that affect all targets.
 | `Middlewares/` directory | STM32 FatFs middleware — replaced |
 | `LinkerScripts/` | STM32 linker scripts — RP2350 uses pico-sdk default or minimal custom script |
 
+### Minimal remora-core modifications for dual-core support
+
+Two files in `Src/remora-core/` receive surgical changes to support the dual-core comms architecture (Phase 21). All other remora-core files remain untouched.
+
+| File | Change |
+|---|---|
+| `remora.cpp` | Remove `comms->init()`, `comms->start()` from constructor; remove `comms->tasks()` from `run()` loop — comms lifecycle moves to Core 1 |
+| `modules/comms/commsHandler.h` | `data` member becomes `volatile bool` — written by Core 1 comms ISR, read by Core 0 servo thread watchdog |
+
 ### Files completely unchanged (zero modifications to remora-core)
 
-Every file in `Src/remora-core/` is untouched. This includes:
+All other files in `Src/remora-core/` are untouched. This includes:
 - `remora.h/.cpp`, `configuration.h`, `data.h`, `remoraStatus.h`
 - All 13 module implementations (stepgen, softEncoder, digitalPin, analogPin, pwm, qei, sigmaDelta, temperature, blink, resetPin, tmc2208, tmc2209, tmc5160)
 - `commsInterface.h/.cpp`, `commsHandler.h/.cpp`
@@ -1776,6 +1785,53 @@ Every file in `Src/remora-core/` is untouched. This includes:
 - `W5500_Networking.h/.cpp` (delegates all SPI calls through `CommsInterface`)
 - `TMCStepper` library, `SoftwareSPI`, `SoftwareSerial`
 - `thermistor.h/.cpp` (except the ADC divisor bug fix)
+
+---
+
+## 21. Dual-Core Comms Isolation
+
+### Motivation
+
+The Base thread (40 kHz) and Servo thread (1 kHz) are hard real-time. On a single core, comms processing (SPI DMA completion ISR, memcpy, ETH polling) runs on the same core and can cause jitter. Offloading all comms to Core 1 gives the real-time threads uncontested access to Core 0.
+
+### Core assignment
+
+| Core | Responsibilities |
+|---|---|
+| **Core 0** | Base thread ISR (40 kHz), Servo thread ISR (1 kHz), Remora state machine, all module updates |
+| **Core 1** | SPI or ETH comms init, DMA/GPIO IRQ handlers, `tasks()` tight loop |
+
+### IRQ affinity
+
+IRQ assignment follows which core calls the registration function:
+
+| IRQ | Handler | Core | Registered by |
+|---|---|---|---|
+| `TIMER0_IRQ_0` | Base thread | Core 0 | `RP2350_timer` init, called from `Remora` constructor on Core 0 |
+| `TIMER0_IRQ_1` | Servo thread | Core 0 | same |
+| `DMA_IRQ_0` | SPI RX completion | Core 1 | `RP2350_SPIComms::init()` called from `core1_entry()` |
+| `IO_IRQ_BANK0` (CS pin) | SPI CS edge | Core 1 | `gpio_set_irq_enabled(gpioCs, ...)` in `RP2350_SPIComms::init()` on Core 1 |
+| `IO_IRQ_BANK0` (other pins) | QEI index, etc. | Core 0 | `gpio_set_irq_enabled(indexPin, ...)` called from module constructors on Core 0 |
+
+On RP2350, each core has independent NVIC and independent `PROC0_INTE`/`PROC1_INTE` GPIO interrupt enable registers. The same `gpio_irq_dispatcher` callback is registered on both cores; both dispatch through the shared `Interrupt::ISRVectorTable`.
+
+### Cross-core data access
+
+`rxData` and `txData` are shared between cores. All struct members are 32-bit aligned, making per-field access atomic on Cortex-M33. The only field requiring explicit `volatile` is `CommsHandler::data` (a `bool`), which is written by the Core 1 comms interrupt and read by the Core 0 servo thread watchdog.
+
+### Implementation
+
+**`Src/remora-core/remora.cpp`** (2 changes):
+- Constructor: remove `comms->init()` and `comms->start()` — comms lifecycle moves to `core1_entry()`
+- `run()` loop: remove `comms->tasks()` calls — Core 1 runs `tasks()` in its own tight loop
+
+**`Src/remora-core/modules/comms/commsHandler.h`** (1 change):
+- `bool data` → `volatile bool data`
+
+**`Src/main.cpp`** (additions):
+- `static CommsHandler* g_commsHandler` — global raw pointer set before Core 1 launch
+- `core1_entry()` — registers `gpio_irq_dispatcher` and enables `IO_IRQ_BANK0` on Core 1, calls `init()`/`start()`, then loops on `tasks()`
+- `main()` calls `multicore_launch_core1(core1_entry)` after storing the pointer, then constructs and runs `Remora` as before
 
 ---
 
@@ -1791,13 +1847,61 @@ Complete Phase 1 (CMake), Phase 2 (Pin), and enough of Phase 3 (Timer) to start 
 
 Complete Phase 3 (Timer) and Phase 4 (Interrupt dispatch) fully. Verify: a minimal JSON config with two Stepgen modules produces correct DDS step frequencies on two GPIO pins, confirmed with a logic analyzer. At 400 Hz frequency command, the oscilloscope should show exactly 400 Hz with no jitter beyond ±1 timer tick (±7 ns).
 
-### Milestone 3 — SPI slave receives packets from Raspberry Pi
+### Milestone 3 — SPI slave receives packets from Raspberry Pi (builtin config)
 
-Complete Phase 5 (SPI Slave Comms). Verify: connect a Raspberry Pi running the `remora-spi` LinuxCNC component. The RP2350 should reach `ST_RUNNING` state, visible from the UART debug output. Load a simple three-stepgen config and verify LinuxCNC's HAL sees joint feedback counts incrementing correctly.
+Use the `remora_rp2350_spi_builtin` build target (`SPI_CTRL=1`, `NO_FATFS_SPI=1`).  This target has full SPI slave DMA comms but loads the hardcoded default config from flash — no SD card is required.
+
+**Build:** flash `remora_rp2350_spi_builtin.uf2`.
+
+**Wiring:** connect the Raspberry Pi SPI master to the RP2350 SPI0 slave pins:
+
+| Signal | RP2350 GPIO |
+|--------|-------------|
+| CLK    | GP2         |
+| MOSI   | GP3         |
+| MISO   | GP4         |
+| CS     | GP5         |
+
+**Verification steps:**
+
+1. Open the USB CDC serial port before powering on.
+2. Observe the startup sequence — config loads from the hardcoded default (no SD card mount attempted), two Stepgen modules and a Blink module are created, threads start.
+3. Start the `remora-spi` LinuxCNC component on the Raspberry Pi.
+4. Confirm `## Transitioning to Running state` appears on the serial port within the 100 ms comms watchdog window.
+5. In the LinuxCNC HAL, verify `joint.0.pos-fb` and `joint.1.pos-fb` respond to step commands — confirms the full DMA → rxData → Stepgen → txData → DMA pipeline.
+6. Verify the onboard LED continues blinking at 2 Hz while in `ST_RUNNING`, proving the servo thread is not starved by comms processing.
+
+**Note:** The hardcoded default config uses GP7/GP10 for step output. Confirm these pins toggle when LinuxCNC issues motion commands.
+
+### Milestone 3b — SPI slave with SD card config
+
+Use the `remora_rp2350_spi` build target (`SPI_CTRL=1`, real FatFs).  This target loads `config.txt` from an SD card, enabling custom module configurations without recompiling.
+
+**Prerequisites:**
+- `no-OS-FatFS-SD-SPI-RPi-Pico` submodule present (`git submodule update --init`).
+- FAT32-formatted SD card with a valid `config.txt` in the root directory.
+- SD card wired to SPI1: SCK=GP10, MOSI=GP11, MISO=GP12, CS=GP13.
+
+**Verification steps:**
+
+1. Write a `config.txt` with three Stepgen joints plus any Digital Pin or Blink modules needed for the target machine.
+2. Flash `remora_rp2350_spi.uf2`.
+3. Confirm the serial output shows `JSON config file read SUCCESS!` and lists the modules being created from the SD card config.
+4. If the SD card is absent, confirm the firmware falls back to the hardcoded default config (not a fatal halt) — serial output shows `SD card not detected — falling back to default config`.
+5. Connect the RPi running `remora-spi` and verify `ST_RUNNING` is reached with the custom config active.
+6. Verify all joints in the custom config appear in LinuxCNC HAL with correct feedback.
 
 ### Milestone 4 — Full SPI motion test
 
 Add Digital Pin, Analog Pin, PWM, and QEI modules to the test config. Verify: digital outputs toggle in response to HAL write commands; ADC values appear in processVariable slots; PWM duty cycle changes track the setPoint; encoder counts track a driven encoder.
+
+### Milestone 4b — Dual-core comms isolation
+
+Complete Phase 21 (Dual-Core). Verify:
+1. Serial output shows `Core 1: comms running` after boot.
+2. Full SPI motion test still passes (LinuxCNC reaches `ST_RUNNING`, joints respond).
+3. The Base and Servo threads are serviced exclusively by Core 0 (confirmed by checking that `DMA_IRQ_0` and the SPI CS GPIO interrupt are registered on Core 1's NVIC).
+4. Step pulse timing is unchanged or improved (no jitter increase) — confirms Core 0 real-time threads are no longer interrupted by comms processing.
 
 ### Milestone 5 — Ethernet comms operational
 

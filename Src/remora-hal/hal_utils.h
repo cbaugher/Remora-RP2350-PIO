@@ -7,12 +7,17 @@
 
 // System reset using the watchdog peripheral.
 // Equivalent to STM32's HAL_NVIC_SystemReset().
-#define pru_reboot()    watchdog_reboot(0, 0, 0)
+// 500 ms delay lets the USB CDC TX buffer drain before the chip resets;
+// without it all printf output after the reboot decision is silently dropped.
+#define pru_reboot()    watchdog_reboot(0, 0, 500)
 
-// Flash lock/unlock — no-ops on RP2350.
-// pico-sdk's flash_range_erase/program handle XIP suspension internally.
-inline void lock_flash()   {}
-inline void unlock_flash() {}
+// Flash lock/unlock.
+// unlock_flash() returns 0 (HAL_OK) so remora-core's TFTP handler compiles.
+// lock_flash() flushes the buffered write page so the last partial 256-byte
+// page from write_to_flash_byte() calls is committed before flash access ends.
+void flush_write_buffer();   // forward declaration — defined in hal_utils.cpp
+inline uint8_t unlock_flash() { return 0; }
+inline void    lock_flash()   { flush_write_buffer(); }
 
 // ---------------------------------------------------------------------------
 // Flash erase/write wrappers
@@ -38,9 +43,8 @@ uint8_t write_to_flash_byte(uint32_t xip_addr, uint8_t data);
 // Write a 16-bit halfword (little-endian) to flash.
 uint8_t write_to_flash_halfword(uint32_t xip_addr, uint16_t data);
 
-// Commit any buffered partial page to flash.
-// Must be called once after the last write_to_flash_byte() call in a sequence.
-void flush_write_buffer();
+// Write a 32-bit word (little-endian) to flash.
+uint8_t write_to_flash_word(uint32_t xip_addr, uint32_t data);
 
 // Millisecond delay (wraps sleep_ms)
 void delay_ms(uint32_t ms);

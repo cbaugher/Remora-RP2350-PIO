@@ -1,26 +1,45 @@
 #include "hal_utils.h"
 #include "hardware/flash.h"
 #include "hardware/sync.h"
+#include "pico/multicore.h"
 #include <cstring>
 #include <cstdio>
 
 // ---------------------------------------------------------------------------
 // Low-level flash primitives — must run from RAM
+//
+// Multicore safety: on RP2350 with dual-core use (Core 0 = real-time threads,
+// Core 1 = comms/TFTP), either core may call these functions:
+//   - Core 1's TFTP handler writes to upload staging flash
+//   - Core 0's store_json_in_flash() copies staging to config flash
+//
+// flash_range_erase/program suspend the XIP interface on the calling core
+// but do NOT stop the other core from fetching instructions from flash.
+// multicore_lockout_start_blocking() parks the other core in RAM before
+// the flash operation begins, and multicore_lockout_end_blocking() releases
+// it afterward.
+//
+// Both cores must call multicore_lockout_victim_init() at startup so that
+// either core can be locked out by the other.
 // ---------------------------------------------------------------------------
 
 static void __not_in_flash_func(rp2350_flash_erase_sector)(uint32_t flash_offset) {
     // flash_offset must be 4 KB aligned
+    multicore_lockout_start_blocking();
     uint32_t irq_state = save_and_disable_interrupts();
     flash_range_erase(flash_offset, FLASH_SECTOR_SIZE);   // 4096 bytes
     restore_interrupts(irq_state);
+    multicore_lockout_end_blocking();
 }
 
 static void __not_in_flash_func(rp2350_flash_write_page)(uint32_t flash_offset,
                                                            const uint8_t* data) {
     // flash_offset must be 256-byte aligned
+    multicore_lockout_start_blocking();
     uint32_t irq_state = save_and_disable_interrupts();
     flash_range_program(flash_offset, data, FLASH_PAGE_SIZE);   // 256 bytes
     restore_interrupts(irq_state);
+    multicore_lockout_end_blocking();
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +106,14 @@ uint8_t write_to_flash_byte(uint32_t xip_addr, uint8_t data) {
 uint8_t write_to_flash_halfword(uint32_t xip_addr, uint16_t data) {
     uint8_t result = write_to_flash_byte(xip_addr,     (uint8_t)(data & 0xFF));
     result        |= write_to_flash_byte(xip_addr + 1, (uint8_t)(data >> 8));
+    return result;
+}
+
+uint8_t write_to_flash_word(uint32_t xip_addr, uint32_t data) {
+    uint8_t result = write_to_flash_byte(xip_addr,     (uint8_t)(data & 0xFF));
+    result        |= write_to_flash_byte(xip_addr + 1, (uint8_t)((data >> 8)  & 0xFF));
+    result        |= write_to_flash_byte(xip_addr + 2, (uint8_t)((data >> 16) & 0xFF));
+    result        |= write_to_flash_byte(xip_addr + 3, (uint8_t)((data >> 24) & 0xFF));
     return result;
 }
 

@@ -30,7 +30,7 @@ void Pin::initialisePin() {
 
     if (mode == INPUT) {
         gpio_set_dir(gpioNum, GPIO_IN);
-        if (modifier == PULLUP || modifier == OPEN_DRAIN) {
+        if (modifier == PULLUP || modifier == OPENDRAIN) {
             gpio_pull_up(gpioNum);
         } else if (modifier == PULLDOWN) {
             gpio_pull_down(gpioNum);
@@ -108,10 +108,17 @@ void Pin::setAsInput() {
     gpio_disable_pulls(gpioNum);
 }
 
+// TODO: review — setPullUp(), setAsInput(), and setAsInput(int) overlap;
+//       consider consolidating into a single method.
+void Pin::setPullUp() {
+    if (gpioNum < 0) return;
+    gpio_pull_up(gpioNum);
+}
+
 void Pin::setAsInput(int pullMode) {
     if (gpioNum < 0) return;
     gpio_set_dir(gpioNum, GPIO_IN);
-    if (pullMode == PULLUP || pullMode == OPEN_DRAIN) {
+    if (pullMode == PULLUP || pullMode == OPENDRAIN) {
         gpio_pull_up(gpioNum);
     } else if (pullMode == PULLDOWN) {
         gpio_pull_down(gpioNum);

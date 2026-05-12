@@ -2,6 +2,7 @@
 #include "pico/stdlib.h"
 #include "hardware/pio.h"
 #include "hardware/gpio.h"
+#include "hardware.h"
 #include "remora-core/modules/moduleInterrupt.h"
 
 // RP2350 hardware quadrature encoder using PIO.
@@ -22,11 +23,6 @@
 // The RP2350 constructor accepts pin numbers as arguments.  A matching change
 // to remora-core/modules/qei/qei.cpp is required to read "ChA Pin"/"ChB Pin"/
 // "Index Pin" from JSON and pass them here (see PortingPlan.md §12.2).
-
-// Forward declaration of PIO program helpers (from quadrature_encoder.pio.h)
-extern "C" {
-    int32_t quadrature_encoder_get_count(PIO pio, uint sm);
-}
 
 class Hardware_QEI {
 private:

@@ -1,0 +1,73 @@
+;
+; spi_slave.pio  —  SPI Mode-0 slave (CPOL=0 CPHA=0), 8-bit MSB-first.
+;
+; The RP2350 A2 PL022 SPI hardware slave is defective: it only captures
+; 1 byte per CS assertion regardless of CSn state or TX FIFO contents.
+; This PIO program replaces it entirely.
+;
+; Pin roles (configured in C via sm_config_set_*_pins / set_jmp_pin):
+;   OUT pin 0  = MISO  (GP3)  — slave transmit
+;   IN  pin 0  = MOSI  (GP4)  — slave receive
+;
+; GPIO constants used by 'wait gpio':
+;   SCK_GPIO = 2 (GP2)
+;   CSN_GPIO = 5 (GP5)
+;
+; SM shift configuration (set in C):
+;   out: SHIFT_LEFT,  no autopull (threshold=32)
+;        TX DMA writes bytes to ((uint8_t*)&pio->txf[sm]) + 3   ← HIGH byte
+;        so each byte lands in OSR[31:24]; SHIFT_LEFT outputs bit31 first = MSB ✓
+;   in:  SHIFT_LEFT,  no autopush (threshold=32)
+;        After 8 'in pins,1', received byte is in ISR[7:0].
+;        'push noblock' (IFFULL=0,NOBLOCK=1) fires unconditionally — exactly one
+;        push per byte.  Autopush is NOT used: it would double-push (valid byte
+;        then a zero word) because 'push noblock' ignores the shift-count threshold.
+;        RX DMA reads bytes from ((uint8_t*)&pio->rxf[sm]) + 0  ← LOW byte ✓
+;
+; Timing (CPHA=0):
+;   MISO bit 7 (MSB) is pre-driven after 'pull noblock', before first SCK rise.
+;   Subsequent MISO bits are updated on each SCK falling edge.
+;   MOSI bits are sampled on each SCK rising edge.
+;
+; Between-transaction synchronisation:
+;   After each byte, .wrap returns to wait_cs.  If CSn is still LOW (mid-
+;   transaction) the wait passes immediately and the next byte begins.  If CSn
+;   went HIGH the SM blocks here, immune to SCK glitches, until the next CS
+;   assertion.  This eliminates the "phantom byte 65" stall that the previous
+;   jmp-pin approach caused between transactions.
+
+.program spi_slave_mode0
+
+.define public SCK_GPIO  2
+.define public CSN_GPIO  5
+
+.wrap_target
+
+public wait_cs:
+    wait 0 gpio CSN_GPIO       ; CSn LOW → active; passes immediately if already LOW
+
+public next_byte:
+    pull noblock               ; OSR ← TX byte  (0x00 if TX FIFO empty)
+    out pins, 1                ; pre-drive MISO bit 7 (MSB) before first SCK rise
+
+    set x, 6                   ; loop counter — 7 more SCK pairs (bits 6..0)
+
+loop:
+    wait 1 gpio SCK_GPIO       ; ↑ SCK rising  — sample point
+    in pins, 1                 ; ISR ← MOSI bit
+    wait 0 gpio SCK_GPIO       ; ↓ SCK falling  — MISO update point
+    out pins, 1                ; MISO ← next bit
+    jmp x-- loop               ; repeat for bits 6,5,4,3,2,1,0
+
+    wait 1 gpio SCK_GPIO       ; 8th ↑ SCK rising
+    in pins, 1                 ; ISR ← MOSI bit 0 (LSB)
+    push noblock               ; byte complete → RX FIFO
+    wait 0 gpio SCK_GPIO       ; drain SCK HIGH before next byte
+                               ; BCM2835 SPI uses continuous SCK (no inter-byte gap):
+                               ; without this, the wrap returns to loop and
+                               ; 'wait 1 gpio SCK_GPIO' fires immediately on the still-HIGH
+                               ; SCK from the previous byte's last edge, capturing stale MOSI
+                               ; and shifting every byte 1 bit forward in the stream.
+
+.wrap                          ; → wait_cs: if CSn LOW passes immediately → next byte
+                               ;            if CSn HIGH blocks until next assertion

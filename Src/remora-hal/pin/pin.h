@@ -1,15 +1,37 @@
 #pragma once
 #include <string>
+#include "pico/stdlib.h"
+#include "hardware.h"
 
-// GPIO mode constants
-#define OUTPUT   0
-#define INPUT    1
+// STM32 HAL compatibility shim.
+// remora-core's TMCStepper driver calls HAL_Delay() directly.
+// Since TMCStepper.h includes this file, defining the macro here
+// resolves the symbol without touching any remora-core source.
+#ifndef HAL_Delay
+#  define HAL_Delay(ms) sleep_ms(ms)
+#endif
+
+#ifndef HAL_GetTick
+#  define HAL_GetTick() to_ms_since_boot(get_absolute_time())
+#endif
+
+#ifndef HAL_NVIC_SystemReset
+#  include "hardware/watchdog.h"
+#  define HAL_NVIC_SystemReset() watchdog_reboot(0, 0, 0)
+#endif
+
+// GPIO mode constants — must match remora-core's convention:
+//   digitalPin.cpp passes 1 for Output, 0 for Input.
+//   Stepgen/Blink pass OUTPUT by name — both are consistent with OUTPUT=1.
+#define OUTPUT   1
+#define INPUT    0
 
 // GPIO modifier constants
 #define NONE        0
 #define PULLUP      1
 #define PULLDOWN    2
-#define OPEN_DRAIN  3   // mapped to PULLUP on RP2350 (no native open-drain)
+#define OPENDRAIN   3   // mapped to PULLUP on RP2350 (no native open-drain)
+#define PULLNONE    NONE  // alias used by remora-core digitalPin.cpp
 
 // GPIO alternate function constants (gpio_function_t values from pico-sdk)
 // These are passed as the `gpio_alt` argument to the alternate-function constructor.
@@ -55,4 +77,5 @@ public:
     void setAsOutput();
     void setAsInput();
     void setAsInput(int pullMode);
+    void setPullUp();  // TODO: review — may be mergeable with setAsInput(PULLUP)
 };

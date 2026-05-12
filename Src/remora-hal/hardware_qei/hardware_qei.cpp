@@ -19,7 +19,7 @@
 
 Hardware_QEI::Hardware_QEI(bool hasIndex, int modifier,
                             int chAPin, int chBPin, int indexPin)
-    : pioInst(pio0), smNum(0), pioOffset(0),
+    : pioInst(pio1), smNum(0), pioOffset(0),
       chAPin(chAPin), chBPin(chBPin), indexPin(indexPin),
       hasIndex(hasIndex), modifier(modifier),
       indexInterrupt(nullptr),
@@ -32,14 +32,13 @@ void Hardware_QEI::init() {
            hasIndex ? " with index" : "");
 
 #ifdef HAS_QUADRATURE_ENCODER_PIO_H
-    pioInst  = pio0;
+    pioInst  = pio1;    // pio0 is used by the SPI slave; QEI must use pio1
     pioOffset = pio_add_program(pioInst, &quadrature_encoder_program);
     smNum    = pio_claim_unused_sm(pioInst, true);
 
-    // chAPin and chBPin must be consecutive (standard PIO program requirement)
-    quadrature_encoder_program_init(pioInst, smNum, pioOffset,
-                                    chAPin,
-                                    0);    // max_step_rate = 0 (unlimited)
+    // chAPin and chBPin must be consecutive (standard PIO program requirement).
+    // No offset arg — .origin 0 pins the program to address 0 always.
+    quadrature_encoder_program_init(pioInst, smNum, chAPin, 0); // max_step_rate=0 (unlimited)
 
     if (hasIndex && indexPin >= 0) {
         indexInterrupt = new ModuleInterrupt<Hardware_QEI>(
@@ -50,7 +49,7 @@ void Hardware_QEI::init() {
 
         gpio_init(indexPin);
         gpio_set_dir(indexPin, GPIO_IN);
-        if (modifier == PULLUP || modifier == OPEN_DRAIN) {
+        if (modifier == PULLUP || modifier == OPENDRAIN) {
             gpio_pull_up(indexPin);
         } else if (modifier == PULLDOWN) {
             gpio_pull_down(indexPin);

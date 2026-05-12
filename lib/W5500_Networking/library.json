@@ -1,0 +1,11 @@
+{
+    "name": "w5500_networking",
+    "version": "1.0.0",
+    "build": {
+        "flags": [
+            "-I ./arch", 
+            "-I ./ioLibrary_Driver/Ethernet",
+            "-I ./lwip/src/include"
+        ]
+    }
+}

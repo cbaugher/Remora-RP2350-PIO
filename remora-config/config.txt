@@ -1,0 +1,18 @@
+{
+	"Board": "RP2350",
+	"Threads": [
+		{"Thread": "Base", "Frequency": 40000},
+		{"Thread": "Servo", "Frequency": 1000}
+	],
+	"Modules":[
+		{"Thread": "Servo",	"Type": "Blink", "Pin":	"GP25", "Frequency": 4},
+		{"Thread": "Base", "Type": "Stepgen", "Comment": "Joint0", "Joint Number": 0, "Enable Pin": "GP7", "Step Pin": "GP8", "Direction Pin": "GP9"},
+		{"Thread": "Base", "Type": "Stepgen", "Comment": "Joint1", "Joint Number": 1, "Enable Pin": "GP14", "Step Pin": "GP15", "Direction Pin": "GP16"},
+		{"Thread": "Base", "Type": "Stepgen", "Comment": "Joint2", "Joint Number": 2, "Enable Pin": "GP17", "Step Pin": "GP18", "Direction Pin": "GP19"},
+		{"Thread": "Servo", "Type": "Digital Pin", "Pin": "GP20", "Mode": "Output", "Data Bit": 0, "Invert": "False", "Modifier": "Pull None" },
+		{"Thread": "Servo", "Type": "Digital Pin", "Pin": "GP21", "Mode": "Input", "Data Bit": 0, "Invert": "False", "Modifier": "Pull Up" },
+		{"Thread": "Servo", "Type": "Analog Pin", "Comment": "ADC0", "Pin": "GP26", "PV[i]": 0},
+		{"Thread": "Servo", "Type": "PWM", "Comment": "PWM0", "PWM Pin": "GP22", "Hardware PWM": "True", "SP[i]": 0, "PWM Max": 256, "Variable Freq": "False", "Period us": 1000, "Period SP[i]": 1},
+		{"Thread": "Base", "Type": "Encoder", "Comment": "Encoder0", "ChA Pin": "GP0", "ChB Pin": "GP1", "Index Pin": "", "PV[i]": 1, "Data Bit": 0, "Modifier": "Pull Up"}
+	]
+}

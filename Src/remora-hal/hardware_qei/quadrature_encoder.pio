@@ -1,0 +1,116 @@
+; Quadrature encoder PIO program for RP2350
+; SPDX-License-Identifier: BSD-3-Clause
+;
+; From pico-examples/pio/quadrature_encoder/quadrature_encoder.pio
+; (raspberrypi/pico-examples, master branch)
+;
+; Decodes a quadrature encoder using a 16-entry jump table.
+; The signed count is maintained in Y and pushed to the RX FIFO
+; at the top of every update cycle.
+;
+; Pin assignment (from quadrature_encoder_program_init):
+;   pin      = Channel A (base pin)
+;   pin + 1  = Channel B
+;
+; ISR is configured for LEFT shift.  After "OUT ISR, 2" (restores old
+; 2-bit state from OSR) and "IN PINS, 2" (inserts current pins at ISR[1:0]):
+;   ISR[3:2] = {ChB_prev, ChA_prev}
+;   ISR[1:0] = {ChB_curr, ChA_curr}
+; "MOV PC, ISR" uses ISR[3:0] (the 4-bit state) as the jump address
+; into the table at addresses 0–15.
+
+.pio_version 0
+
+.program quadrature_encoder
+.origin 0
+
+; === Jump table (addresses 0–15) ===
+; Index = {ChB_prev, ChA_prev, ChB_curr, ChA_curr}
+; CW  (+): states 2, 4, 11, 13
+; CCW (−): states 1, 7, 8, 14  (entry 14 IS the decrement handler)
+; no change:  states 0, 5, 10, 15  (entry 15 IS the update handler / .wrap_target)
+jmp update    ;  0  0000  no change
+jmp decrement ;  1  0001  CCW
+jmp increment ;  2  0010  CW
+jmp update    ;  3  0011  error/glitch
+jmp increment ;  4  0100  CW
+jmp update    ;  5  0101  no change
+jmp update    ;  6  0110  error/glitch
+jmp decrement ;  7  0111  CCW
+jmp decrement ;  8  1000  CCW
+jmp update    ;  9  1001  error/glitch
+jmp update    ; 10  1010  no change
+jmp increment ; 11  1011  CW
+jmp update    ; 12  1100  error/glitch
+jmp increment ; 13  1101  CW
+decrement:    ; 14  1110  CCW  — handler is the table entry itself
+    jmp y--, update      ; Y--; always jumps (Y wraps to 0xFFFFFFFF = -1 if was 0)
+; update:     ; 15  1111  no change — update: IS address 15, also .wrap_target
+
+; === Main loop (address 15) ===
+.wrap_target
+update:
+    mov isr, y           ; push current count into ISR …
+    push noblock         ; … and send to RX FIFO (non-blocking)
+
+    out isr, 2           ; restore previous 2-bit pin state from OSR into ISR[1:0]
+    in pins, 2           ; left-shift: current pins → ISR[1:0], previous → ISR[3:2]
+    mov osr, isr         ; save full 4-bit state in OSR for next cycle
+    mov pc, isr          ; jump to table entry ISR[3:0] (0–15)
+
+increment:
+    mov y, ~y            ; Y = ~Y
+    jmp y--, increment_cont  ; ~Y - 1  (always taken — decrements magnitude)
+increment_cont:
+    mov y, ~y            ; Y = ~(~Y - 1) = Y + 1
+.wrap                    ; → update (address 15)
+
+% c-sdk {
+#include "hardware/clocks.h"
+#include "hardware/gpio.h"
+
+// Initialise the quadrature encoder state machine.
+//   pio          — PIO block (pio0 or pio1)
+//   sm           — state machine index
+//   pin          — base GPIO for ChA; ChB must be pin + 1
+//   max_step_rate — maximum expected transitions per second (0 = run at full speed)
+static inline void quadrature_encoder_program_init(PIO pio, uint sm,
+                                                    uint pin, int max_step_rate)
+{
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 2, false); // both pins = inputs
+    pio_gpio_init(pio, pin);
+    pio_gpio_init(pio, pin + 1);
+    gpio_pull_up(pin);
+    gpio_pull_up(pin + 1);
+
+    pio_sm_config c = quadrature_encoder_program_get_default_config(0);
+    sm_config_set_in_pins(&c, pin);
+    sm_config_set_jmp_pin(&c, pin);
+    sm_config_set_in_shift(&c, false, false, 32); // left shift, no autopush
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_NONE);
+
+    if (max_step_rate == 0) {
+        sm_config_set_clkdiv(&c, 1.0f);
+    } else {
+        float div = (float)clock_get_hz(clk_sys) / (10.0f * (float)max_step_rate);
+        sm_config_set_clkdiv(&c, div);
+    }
+
+    pio_sm_init(pio, sm, 0, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+// Return the latest encoder count as a signed 32-bit integer.
+// Drains the RX FIFO and returns the most-recent value.
+// Blocks until at least one value is available.
+static inline int32_t quadrature_encoder_get_count(PIO pio, uint sm)
+{
+    uint32_t ret;
+    int n = pio_sm_get_rx_fifo_level(pio, sm) + 1;
+    while (n > 0) {
+        ret = pio_sm_get_blocking(pio, sm);
+        n--;
+    }
+    return (int32_t)ret;
+}
+%}

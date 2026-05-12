@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <cstdint>
+#include "pico/stdlib.h"
 
 // RP2350 hardware PWM.
 //

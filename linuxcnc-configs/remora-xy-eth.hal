@@ -1,0 +1,64 @@
+
+# Remora ETH HAL — 2-joint (XY) configuration
+# For use with the remora_rp2350_eth firmware build (W5500 / UDP).
+# The RP2350 must be at 10.10.10.10:27181 (configured in configuration.h).
+#
+# Install the HAL component once on the Pi:
+#   sudo halcompile --install remora-eth-3.0.c
+#
+# NOTE: if pin names below cause a HAL error at startup, run:
+#   halcmd show pin remora
+# after a bare 'loadrt remora-eth' to see the actual pin names the
+# installed version of the component exposes.
+
+# ---- Load realtime components ----
+
+    loadrt [KINS]KINEMATICS
+    loadrt [EMCMOT]EMCMOT base_period_nsec=[EMCMOT]BASE_PERIOD servo_period_nsec=[EMCMOT]SERVO_PERIOD num_joints=[KINS]JOINTS
+
+    loadrt remora-eth
+
+# ---- E-stop and comms status ----
+# remora.enable must be driven HIGH for the component to send UDP packets.
+# remora.status goes HIGH when the ETH component is receiving valid responses
+# from the RP2350.  This drives emc-enable-in so LinuxCNC can leave e-stop.
+
+    setp remora.enable 1
+    # remora.reset needs a rising edge to bootstrap the first PRU_READ.
+    # Wire it to user-request-enable so every F1 press (estop-exit request)
+    # retriggers the connection — required if the first attempt times out.
+    net remora-reset    <= iocontrol.0.user-request-enable => remora.reset
+
+    net remora-status   <= remora.status            => iocontrol.0.emc-enable-in
+
+# ---- Add remora and motion functions to servo thread ----
+
+    addf remora.read            servo-thread
+    addf motion-command-handler servo-thread
+    addf motion-controller      servo-thread
+    addf remora.update-freq     servo-thread
+    addf remora.write           servo-thread
+
+# ---- Joint 0 (X axis) ----
+
+    setp remora.joint.0.scale       [JOINT_0]SCALE
+    setp remora.joint.0.maxaccel    [JOINT_0]STEPGEN_MAXACCEL
+    setp remora.joint.0.pgain       [JOINT_0]P_GAIN
+    setp remora.joint.0.ff1gain     [JOINT_0]FF1_GAIN
+    setp remora.joint.0.deadband    [JOINT_0]DEADBAND
+
+    net xpos-cmd    <= joint.0.motor-pos-cmd    => remora.joint.0.pos-cmd
+    net j0pos-fb    <= remora.joint.0.pos-fb    => joint.0.motor-pos-fb
+    net j0enable    <= joint.0.amp-enable-out   => remora.joint.0.enable
+
+# ---- Joint 1 (Y axis) ----
+
+    setp remora.joint.1.scale       [JOINT_1]SCALE
+    setp remora.joint.1.maxaccel    [JOINT_1]STEPGEN_MAXACCEL
+    setp remora.joint.1.pgain       [JOINT_1]P_GAIN
+    setp remora.joint.1.ff1gain     [JOINT_1]FF1_GAIN
+    setp remora.joint.1.deadband    [JOINT_1]DEADBAND
+
+    net j1pos-cmd   <= joint.1.motor-pos-cmd    => remora.joint.1.pos-cmd
+    net j1pos-fb    <= remora.joint.1.pos-fb    => joint.1.motor-pos-fb
+    net j1enable    <= joint.1.amp-enable-out   => remora.joint.1.enable

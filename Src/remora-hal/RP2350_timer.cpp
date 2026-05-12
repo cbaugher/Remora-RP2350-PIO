@@ -1,4 +1,5 @@
 #include "RP2350_timer.h"
+#include "remora-core/thread/timerInterrupt.h"  // needed for complete type in unique_ptr<TimerInterrupt> destructor
 #include "remora-core/thread/pruThread.h"
 #include "hardware/irq.h"
 #include <cstdio>
@@ -57,7 +58,6 @@ void RP2350_timer::startTimer() {
 void RP2350_timer::stopTimer() {
     cancel_repeating_timer(&timerState);
     timerRunning = false;
-    printf("RP2350_timer: stopped\n");
 }
 
 void RP2350_timer::timerTick() {

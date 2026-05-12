@@ -24,9 +24,9 @@ static void gpio_irq_dispatcher(uint gpio, uint32_t events) {
 // DMA IRQ 0 — SPI slave RX double-buffer completion (channels A and B)
 // DMA_IRQ_0 = 11
 // ---------------------------------------------------------------------------
+
 static void __isr dma_irq0_handler() {
     Interrupt::InvokeHandler(DMA_IRQ_0);
-    // Clear all pending channel interrupts on IRQ0 line
     dma_hw->ints0 = dma_hw->ints0;
 }
 

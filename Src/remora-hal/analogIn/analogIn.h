@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <cstdint>
+#include <cmath>   // provides logf, expf, etc. needed by thermistor.cpp
 
 // Single-channel ADC input.
 // RP2350 has one 12-bit ADC; accessible pins on Pico 2:

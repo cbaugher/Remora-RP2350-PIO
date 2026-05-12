@@ -145,7 +145,6 @@ set(REMORA_HAL_SOURCES
     Src/remora-hal/hardware_qei/hardware_qei.cpp
     Src/remora-hal/board_led_status.cpp
     Src/remora-hal/hal_utils.cpp
-    Src/remora-hal/shared_handlers.cpp
     Src/remora-hal/RP2350_timer.cpp
 )
 

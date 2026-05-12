@@ -12,7 +12,6 @@
 // ETH build (SPI_CTRL not defined):
 //   Uses a lightweight stub that serves a hardcoded default JSON config so
 //   the Remora state machine can reach ST_START without any SD card hardware.
-//   This stub is sufficient for Milestones 1–2 and ETH-path testing.
 // ---------------------------------------------------------------------------
 
 #if defined(SPI_CTRL) && !defined(NO_FATFS_SPI)

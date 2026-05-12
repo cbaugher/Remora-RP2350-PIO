@@ -10,9 +10,6 @@
 //
 // Include the .pio.h file generated during the build, or add the .pio source
 // to your CMakeLists.txt with pico_generate_pio_header().
-//
-// For Milestone 1 (LED blink verification) the QEI module is not exercised;
-// this implementation becomes active from Milestone 2 onward.
 #ifdef HAS_QUADRATURE_ENCODER_PIO_H
 #  include "quadrature_encoder.pio.h"
 #endif
